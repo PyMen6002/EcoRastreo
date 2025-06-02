@@ -167,6 +167,7 @@
     <div id="charts">
       <div id="temperatureChart" class="chart-container"></div>
       <div id="humidityChart" class="chart-container"></div>
+      <div id="precipitationChart" class="chart-container"></div>
     </div>
   </div>
 
@@ -242,51 +243,130 @@
       }
     }
 
-    function fetchClimateData(lat, lon) {
-      const endDate = new Date();
-      const startDate = new Date();
-      startDate.setDate(endDate.getDate() - 365);
-      const formatDate = date => date.toISOString().split('T')[0];
+  function fetchClimateData(lat, lon) {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(endDate.getDate() - 365);
+    const formatDate = date => date.toISOString().split('T')[0];
 
-      const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}&daily=temperature_2m_max,temperature_2m_min,relative_humidity_2m_max,relative_humidity_2m_min&timezone=auto`;
+    const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}&daily=temperature_2m_max,temperature_2m_min,relative_humidity_2m_max,relative_humidity_2m_min,precipitation_sum&timezone=auto`;
 
-      fetch(url)
-      .then(response => response.json())
-      .then(data => {
-        if (data.daily) {
-          // Quitamos el último valor de cada array
-          const dates = data.daily.time.slice(0, -1);
-          const tempAvg = data.daily.temperature_2m_max.slice(0, -1).map((max, i) => {
-              return (max + data.daily.temperature_2m_min[i]) / 2;
+    fetch(url)
+    .then(response => response.json())
+    .then(data => {
+      if (data.daily) {
+        const dates = data.daily.time.slice(0, -1);
+        const tempMax = data.daily.temperature_2m_max.slice(0, -1);
+        const tempMin = data.daily.temperature_2m_min.slice(0, -1);
+        const tempAvg = tempMax.map((max, i) => (max + tempMin[i]) / 2);
+
+        const humidityAvg = data.daily.relative_humidity_2m_max.slice(0, -1).map((max, i) => {
+          return (max + data.daily.relative_humidity_2m_min[i]) / 2;
+        });
+
+        const movingAverage = (data, windowSize) => {
+          return data.map((val, idx, arr) => {
+            const start = Math.max(0, idx - Math.floor(windowSize / 2));
+            const end = Math.min(arr.length, idx + Math.ceil(windowSize / 2));
+            const window = arr.slice(start, end);
+            const avg = window.reduce((sum, v) => sum + v, 0) / window.length;
+            return avg;
           });
+        };
 
-          const humidityAvg = data.daily.relative_humidity_2m_max.slice(0, -1).map((max, i) => {
-              return (max + data.daily.relative_humidity_2m_min[i]) / 2;
-          });
+        const smoothAvg = movingAverage(tempAvg, 7);
+        const smoothMin = movingAverage(tempMin, 7);
+        const smoothMax = movingAverage(tempMax, 7);
 
-          Plotly.newPlot('temperatureChart', [{
-              x: dates,
-              y: tempAvg,
-              type: 'scatter',
-              mode: 'lines',
-              name: 'Temperatura Media (°C)'
-          }], { title: 'Temperatura Media Diaria', margin: { t: 40 } });
+        Plotly.newPlot('temperatureChart', [
+          {
+            x: dates,
+            y: tempAvg,
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Temperatura Media',
+            line: { color: 'rgba(200,0,0,0.3)' }
+          },
+          {
+            x: dates,
+            y: smoothAvg,
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Media',
+            line: { color: 'red', width: 2, shape: 'spline' }
+          },
+          {
+            x: dates,
+            y: smoothMin,
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Mínima',
+            line: { color: 'blue', width: 2, dash: 'dot', shape: 'spline' }
+          },
+          {
+            x: dates,
+            y: smoothMax,
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Máxima',
+            line: { color: 'orange', width: 2, dash: 'dash', shape: 'spline' }
+          }
+        ], {
+          title: 'Temperatura Diaria (°C)',
+          margin: { t: 40 },
+          legend: { orientation: 'h', x: 0, y: 1.2 }
+        });
 
-          Plotly.newPlot('humidityChart', [{
-              x: dates,
-              y: humidityAvg,
-              type: 'scatter',
-              mode: 'lines',
-              name: 'Humedad Media (%)'
-          }], { title: 'Humedad Media Diaria', margin: { t: 40 } });
-        } else {
-          alert('No se encontraron datos climáticos.');
-        }
-      })
-      .catch(error => {
-        console.error('Error al obtener clima:', error);
-      });
-    }
+        Plotly.newPlot('humidityChart', [{
+          x: dates,
+          y: humidityAvg,
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Humedad Media (%)'
+        }], {
+          title: 'Humedad Media Diaria',
+          margin: { t: 40 }
+        });
+
+        // Procesamiento de precipitaciones por mes
+        const precipitation = data.daily.precipitation_sum.slice(0, -1);
+        const monthLabels = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+        const monthlyPrecip = new Array(12).fill(0);
+        const monthlyCounts = new Array(12).fill(0);
+
+        dates.forEach((dateStr, i) => {
+          const month = new Date(dateStr).getMonth();
+          monthlyPrecip[month] += precipitation[i] || 0;
+          monthlyCounts[month]++;
+        });
+
+        Plotly.newPlot('precipitationChart', [{
+          x: monthLabels,
+          y: monthlyPrecip,
+          type: 'bar',
+          name: 'Precipitación mensual (mm)',
+          marker: { color: 'skyblue' }
+        }], {
+          title: 'Precipitación Total Mensual (mm)',
+          margin: { t: 40 }
+        });
+
+        // Ajustar el tamaño de los gráficos
+        const charts = document.querySelectorAll('.chart-container');
+        charts.forEach(chart => {
+          chart.style.height = '400px';
+          chart.style.width = '100%';
+        });
+
+      } else {
+        alert('No se encontraron datos climáticos.');
+      }
+    })
+    .catch(error => {
+      console.error('Error al obtener clima:', error);
+    });
+  }
+
   </script>
 </body>
 </html>
